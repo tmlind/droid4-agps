@@ -1,0 +1,4 @@
+Tool to upload xtra2.bin to the modem for agps on droid4
+
+Note that this is still very much work in progress and does not
+seem to work yet beyond uploading the xtra2.bin to the modem.
