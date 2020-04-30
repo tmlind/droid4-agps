@@ -184,6 +184,23 @@ err_close_dlci:
 
 static int motmdm_enable_almanac(const char *file)
 {
+	const char *cmd = "AT+MPDXDATA=\"/mot_rmt/xtra2.bin\"";
+	const char *dev = "/dev/gnss0";
+	int error, fd;
+
+	fd = open(dev, O_RDWR | O_NOCTTY | O_NDELAY);
+	if (fd < 0) {
+		fprintf(stderr,
+			"ERROR: %s %s open, check permissions: %i\n",
+				__func__, dev, fd);
+
+		return -ENODEV;
+	}
+
+	error = dprintf(fd, "%s\r", cmd);
+
+	close(fd);
+
 	return 0;
 }
 
@@ -249,6 +266,9 @@ int main(const int argc, const char **argv)
 
 			return motmdm_add_enable_almanac(file);
 		}
+
+		if (!strncmp("--enable-only", argv[1], 13))
+			return motmdm_enable_almanac(NULL);
 	}
 
 	error = download_almanac(&file);
