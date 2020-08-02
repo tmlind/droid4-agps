@@ -23,6 +23,7 @@
 
 static const int debug = 1;
 static const char *bin_name;
+static int mfd;
 
 static int download_almanac(const char **file)
 {
@@ -101,7 +102,16 @@ static int gsmtty_send_command(int dlci, const char *fmt, const char *cmd,
 	if (strncmp(expect, resp + ID_LEN, strlen(expect)))
 		return -EIO;
 
-	return 0;
+	if (!strncmp("AT+MFSOPEN=", cmd, 11)) {
+		/* +MFSOPEN:ERROR */
+		if (!strncmp("ERROR", resp + ID_LEN + 8 + 1, 5))
+			return -EIO;
+
+		/* +MFSOPEN:n where n is a modem fd */
+		error = atoi(resp + ID_LEN + 8 + 1);
+	}
+
+	return error;
 }
 
 static void gsmtty_kick_hung(int dlci)
@@ -117,7 +127,7 @@ static void gsmtty_kick_hung(int dlci)
 	}
 }
 
-#define MOTMDM_DATA_PREFIX	"AT+MFSWRITE=0,"
+#define MOTMDM_DATA_PREFIX	"AT+MFSWRITE=%i,"
 #define MOTMDM_DATA_POSTFIX	",XXX\r"
 #define MOTMDM_MAX_CMDLEN	(sizeof(MOTMDM_DATA_PREFIX) + \
 				 MOTMDM_MAX_BYTES * 2 + \
@@ -144,9 +154,11 @@ static int gsmtty_add_almanac(const char *file)
 
 	error = gsmtty_send_command(dlci, "%s",
 				    "AT+MFSOPEN=1234567890,\"xtra2.bin\"\r",
-				    "+MFSOPEN:0");
+				    "+MFSOPEN:");
 	if (error < 0)
 		goto err_close_dlci;
+
+	mfd = error;
 
 	data = open(file, O_RDONLY);
 	if (data < 0) {
@@ -167,7 +179,7 @@ static int gsmtty_add_almanac(const char *file)
 		}
 
 		p = cmd;
-		p += snprintf(p, sizeof(MOTMDM_DATA_PREFIX), "%s", MOTMDM_DATA_PREFIX);
+		p += snprintf(p, sizeof(MOTMDM_DATA_PREFIX), MOTMDM_DATA_PREFIX, mfd);
 		for (i = 0; i < chunk; i++) {
 			snprintf(hexbyte, 3, "%02x", buf[i]);
 			p += snprintf(p, 2, "%c", toupper(hexbyte[0]));
@@ -191,8 +203,8 @@ err_mfsclose:
 	if (error < 0)
 		gsmtty_kick_hung(dlci);
 
-	error = gsmtty_send_command(dlci, "%s",
-				    "AT+MFSCLOSE=0\r",
+	sprintf(cmd, "AT+MFSCLOSE=%i\r", mfd);
+	error = gsmtty_send_command(dlci, "%s", cmd,
 				    "+MFSCLOSE:OK");
 
 err_close_dlci:
