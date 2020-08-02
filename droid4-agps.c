@@ -7,9 +7,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <sys/ioctl.h>
+#include <sys/time.h>
+
+#define ID_LEN			5
 
 #define XTRA2_URL		http://xtrapath2.izatcloud.net/xtra2.bin
 #define XTRA2_MAX_SIZE		(100 * 1024)
@@ -27,17 +31,18 @@ static int download_almanac(const char **file)
 
 #define BUF_SIZE		4096
 
-static int motmdm_send_command(int dlci, const char *fmt, const char *cmd,
+static int gsmtty_send_command(int dlci, const char *fmt, const char *cmd,
 			       const char *expect)
 {
+	char mesg[BUF_SIZE];
 	char resp[BUF_SIZE];
 	char dbg[BUF_SIZE + 3];
 	struct timespec ts;
 	struct pollfd pfd;
+	unsigned short id;
 	int error;
+	char *m;
 
-	ts.tv_sec = 3;
-	ts.tv_nsec = 0;
 	pfd.fd = dlci;
 	pfd.events = POLLIN;
 	pfd.revents = 0;
@@ -49,12 +54,26 @@ static int motmdm_send_command(int dlci, const char *fmt, const char *cmd,
 		printf("%s\n", dbg);
 	}
 
-	error = dprintf(dlci, fmt, cmd);
+	error = clock_gettime(CLOCK_REALTIME, &ts);
+	if (error)
+		return error;
+
+	id = (ts.tv_sec % 100) * 100;
+	id += (ts.tv_nsec / 1000 / 1000 / 10);
+
+	m = mesg;
+	memset(m, 0, BUF_SIZE);
+	m += sprintf(m, "U%04u", id);
+	m += sprintf(m, fmt, cmd);
+
+	error = dprintf(dlci, mesg);
 	if (error < 0)
 		return error;
 
 	fsync(dlci);
 
+	ts.tv_sec = 3;
+	ts.tv_nsec = 0;
 	error = ppoll(&pfd, 1, &ts, NULL);
 	switch (error) {
 	case 0:
@@ -75,22 +94,22 @@ static int motmdm_send_command(int dlci, const char *fmt, const char *cmd,
 	if (debug) {
 		memset(dbg, 0, BUF_SIZE);
 		sprintf(dbg, "< ");
-		sprintf(dbg + 2, "%s", resp);
+		sprintf(dbg + 2, "%s", resp + ID_LEN);
 		printf("%s\n", dbg);
 	}
 
-	if (strncmp(expect, resp, strlen(expect)))
+	if (strncmp(expect, resp + ID_LEN, strlen(expect)))
 		return -EIO;
 
 	return 0;
 }
 
-static void motmdm_kick_hung(int dlci)
+static void gsmtty_kick_hung(int dlci)
 {
 	int error, retries = 10;
 
 	while (retries--) {
-		error = motmdm_send_command(dlci, "%s",
+		error = gsmtty_send_command(dlci, "%s",
 					    "AT+MFSCLOSE=999\r",
 					    "+MFSCLOSE:ERROR");
 		if (!error)
@@ -110,9 +129,9 @@ static void motmdm_kick_hung(int dlci)
  * "AT+MFSWRITE=0,data,len\r" "+MFSWRITE:len"
  * "AT+MFSCLOSE=0\r" "+MFSCLOSE:OK"
  */
-static int motmdm_add_almanac(const char *file)
+static int gsmtty_add_almanac(const char *file)
 {
-	const char *channel = "/dev/motmdm6";
+	const char *channel = "/dev/gsmtty6";
 	unsigned char buf[MOTMDM_MAX_BYTES];
 	char cmd[MOTMDM_MAX_CMDLEN];
 	int error, dlci, data, i;
@@ -123,7 +142,7 @@ static int motmdm_add_almanac(const char *file)
 	if (dlci < 0)
 		return -ENODEV;
 
-	error = motmdm_send_command(dlci, "%s",
+	error = gsmtty_send_command(dlci, "%s",
 				    "AT+MFSOPEN=1234567890,\"xtra2.bin\"\r",
 				    "+MFSOPEN:0");
 	if (error < 0)
@@ -157,7 +176,7 @@ static int motmdm_add_almanac(const char *file)
 		p += snprintf(p, sizeof(MOTMDM_DATA_POSTFIX), ",%i\r", chunk);
 		sprintf(resp, "+MFSWRITE:%i", chunk);
 
-		error = motmdm_send_command(dlci, "%s", cmd, resp);
+		error = gsmtty_send_command(dlci, "%s", cmd, resp);
 		if (error < 0)
 			goto err_data;
 
@@ -170,9 +189,9 @@ err_data:
 
 err_mfsclose:
 	if (error < 0)
-		motmdm_kick_hung(dlci);
+		gsmtty_kick_hung(dlci);
 
-	error = motmdm_send_command(dlci, "%s",
+	error = gsmtty_send_command(dlci, "%s",
 				    "AT+MFSCLOSE=0\r",
 				    "+MFSCLOSE:OK");
 
@@ -182,11 +201,11 @@ err_close_dlci:
 	return error;
 }
 
-static int motmdm_enable_almanac(const char *file)
+static int gsmtty_enable_almanac(const char *file)
 {
 	const char *cmd = "AT+MPDXDATA=\"/mot_rmt/xtra2.bin\"";
 	const char *dev = "/dev/gnss0";
-	int error, fd;
+	int fd;
 
 	fd = open(dev, O_RDWR | O_NOCTTY | O_NDELAY);
 	if (fd < 0) {
@@ -197,22 +216,22 @@ static int motmdm_enable_almanac(const char *file)
 		return -ENODEV;
 	}
 
-	error = dprintf(fd, "%s\r", cmd);
+	dprintf(fd, "%s\r", cmd);
 
 	close(fd);
 
 	return 0;
 }
 
-static int motmdm_add_enable_almanac(const char *file)
+static int gsmtty_add_enable_almanac(const char *file)
 {
 	int error;
 
-	error = motmdm_add_almanac(file);
+	error = gsmtty_add_almanac(file);
 	if (error < 0)
 		return error;
 
-	error = motmdm_enable_almanac(file);
+	error = gsmtty_enable_almanac(file);
 	if (error)
 		return error;
 
@@ -264,18 +283,18 @@ int main(const int argc, const char **argv)
 			if (error < 0)
 				return print_usage();
 
-			return motmdm_add_enable_almanac(file);
+			return gsmtty_add_enable_almanac(file);
 		}
 
 		if (!strncmp("--enable-only", argv[1], 13))
-			return motmdm_enable_almanac(NULL);
+			return gsmtty_enable_almanac(NULL);
 	}
 
 	error = download_almanac(&file);
 	if (error)
 		return error;
 
-	error = motmdm_add_enable_almanac(file);
+	error = gsmtty_add_enable_almanac(file);
 	if (error)
 		return error;
 
