@@ -213,9 +213,10 @@ err_close_dlci:
 	return error;
 }
 
+/* Note we need to manually prefix U1234 as we write via dev/gnss0 */
 static int gsmtty_enable_almanac(const char *file)
 {
-	const char *cmd = "AT+MPDXDATA=\"/mot_rmt/xtra2.bin\"";
+	const char *cmd = "U1234AT+MPDXDATA=\"/mot_rmt/xtra2.bin\"";
 	const char *dev = "/dev/gnss0";
 	int fd;
 
