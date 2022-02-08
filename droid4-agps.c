@@ -278,6 +278,28 @@ static int gsmtty_enable_almanac(const char *file)
 	return 0;
 }
 
+static int gsmtty_clear_almanac(const char *file)
+{
+	const char *cmd = "U1234AT+MPDCLEAR=65535";
+	const char *dev = "/dev/gnss0";
+	int fd;
+
+	fd = open(dev, O_RDWR | O_NOCTTY | O_NDELAY);
+	if (fd < 0) {
+		fprintf(stderr,
+			"ERROR: %s %s open, check permissions: %i\n",
+				__func__, dev, fd);
+
+		return -ENODEV;
+	}
+
+	dprintf(fd, "%s\r", cmd);
+
+	close(fd);
+
+	return 0;
+}
+
 static int gsmtty_add_enable_almanac(const char *file)
 {
 	int error;
@@ -295,7 +317,7 @@ static int gsmtty_add_enable_almanac(const char *file)
 
 static int print_usage(void)
 {
-	printf("usage: %s [--help|--inject-time|--download-only=file|--upload-only=file]\n",
+	printf("usage: %s [--help|--inject-time|--clear|--download-only=file|--upload-only=file]\n",
 	       bin_name);
 
 	return -EINVAL;
@@ -334,6 +356,9 @@ int main(const int argc, const char **argv)
 
 		if (!strncmp("--inject-time", argv[1], 13))
 			return gsmtty_inject_time(file);
+
+		if (!strncmp("--clear", argv[1], 7))
+			return gsmtty_clear_almanac(file);
 
 		if (!strncmp("--upload-only=", argv[1], 14)) {
 			file = argv[1] + 14;
