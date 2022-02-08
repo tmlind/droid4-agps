@@ -12,6 +12,7 @@
 
 #include <sys/ioctl.h>
 #include <sys/time.h>
+#include <sys/timex.h>
 
 #define ID_LEN			5
 
@@ -213,6 +214,47 @@ err_close_dlci:
 	return error;
 }
 
+static int gsmtty_inject_time(const char *file)
+{
+	const char *fmt = "U1234AT+MPDTIME=%u,%u,%u\r";
+	const char *dev = "/dev/gnss0";
+	unsigned long time_hi, time_lo;
+	signed long long now_ms, gps_ms;
+	int error, maxerr, fd;
+	struct timeval *tv;
+	struct timex tmx;
+
+	fd = open(dev, O_RDWR | O_NOCTTY | O_NDELAY);
+	if (fd < 0) {
+		fprintf(stderr,
+			"ERROR: %s %s open, check permissions: %i\n",
+				__func__, dev, fd);
+
+		return -ENODEV;
+	}
+
+	memset(&tmx, 0, sizeof(struct timex));
+	error = adjtimex(&tmx);
+	if (error)
+		goto err_out;
+	tv = &tmx.time;
+	now_ms = tv->tv_sec * 1000;
+	now_ms += tv->tv_usec / 1000;
+	gps_ms = now_ms - 315964800000; /* Jan 6th 1980, no leap seconds */
+	time_hi = gps_ms >> 32;
+	time_lo = gps_ms & 0xffffffff;
+	maxerr = tmx.maxerror / 1000;
+	dprintf(fd, fmt, time_hi, time_lo, maxerr);
+
+	printf("Injected time: %llu gps time: %llu (%lu,%lu,%i)\n",
+		now_ms, gps_ms, time_hi, time_lo, maxerr);
+
+	close(fd);
+
+err_out:
+	return error;
+}
+
 /* Note we need to manually prefix U1234 as we write via dev/gnss0 */
 static int gsmtty_enable_almanac(const char *file)
 {
@@ -253,7 +295,7 @@ static int gsmtty_add_enable_almanac(const char *file)
 
 static int print_usage(void)
 {
-	printf("usage: %s [--help|--download-only=file|--upload-only=file]\n",
+	printf("usage: %s [--help|--inject-time|--download-only=file|--upload-only=file]\n",
 	       bin_name);
 
 	return -EINVAL;
@@ -289,6 +331,9 @@ int main(const int argc, const char **argv)
 
 			return download_almanac(&file);
 		}
+
+		if (!strncmp("--inject-time", argv[1], 13))
+			return gsmtty_inject_time(file);
 
 		if (!strncmp("--upload-only=", argv[1], 14)) {
 			file = argv[1] + 14;
