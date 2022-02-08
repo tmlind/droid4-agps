@@ -220,7 +220,7 @@ static int gsmtty_inject_time(const char *file)
 	const char *dev = "/dev/gnss0";
 	unsigned long time_hi, time_lo;
 	signed long long now_ms, gps_ms;
-	int error, maxerr, fd;
+	int ret, maxerr, fd;
 	struct timeval *tv;
 	struct timex tmx;
 
@@ -234,9 +234,20 @@ static int gsmtty_inject_time(const char *file)
 	}
 
 	memset(&tmx, 0, sizeof(struct timex));
-	error = adjtimex(&tmx);
-	if (error)
-		goto err_out;
+	ret = adjtimex(&tmx);
+	if (ret != TIME_OK && ret != TIME_INS && ret != TIME_DEL) {
+		if (ret < 0) {
+			printf("ERROR: adjtimex failed with %i\n", ret);
+			perror("Error: ");
+			goto err_out;
+		} else if (ret == TIME_OOP || ret == TIME_WAIT) {
+			sleep(2);
+			ret = gsmtty_inject_time(file);
+			goto err_out;
+		} else if (ret == TIME_ERROR) {
+			printf("WARNING: Kernel reports time is unreliable\n");
+		}
+	}
 	tv = &tmx.time;
 	now_ms = tv->tv_sec * 1000;
 	now_ms += tv->tv_usec / 1000;
@@ -246,13 +257,12 @@ static int gsmtty_inject_time(const char *file)
 	maxerr = tmx.maxerror / 1000;
 	dprintf(fd, fmt, time_hi, time_lo, maxerr);
 
-	printf("Injected time: %llu gps time: %llu (%lu,%lu,%i)\n",
-		now_ms, gps_ms, time_hi, time_lo, maxerr);
-
-	close(fd);
+	printf("Injected time: %llu gps time: %llu (%lu,%lu,%i) timex offset: %li\n",
+		now_ms, gps_ms, time_hi, time_lo, maxerr, tmx.offset);
 
 err_out:
-	return error;
+	close(fd);
+	return ret < 0 ? -1 : 0;
 }
 
 /* Note we need to manually prefix U1234 as we write via dev/gnss0 */
